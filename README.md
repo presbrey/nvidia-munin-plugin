@@ -4,7 +4,7 @@
 
 This Munin plugin monitors Nvidia GPU statistics, providing valuable insights into GPU performance and resource utilization. It captures and graphs the following metrics for each detected Nvidia GPU:
 
-- Memory Usage (MiB)
+- Memory Usage (Bytes)
 - Temperature (°C)
 - Power Draw (W)
 - GPU Utilization (%)
@@ -105,6 +105,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Version History
 
+- 1.1.0
+  - Updated memory usage reporting from MiB to Bytes for improved precision
 - 1.0.0
   - Initial release
   - Basic monitoring of memory usage, temperature, power draw, and GPU utilization
