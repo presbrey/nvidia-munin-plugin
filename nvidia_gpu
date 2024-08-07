@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+
+import sys, os
+import subprocess
+
+NVIDIA_SMI = os.environ.get('NVIDIA_SMI', '/usr/bin/nvidia-smi')
+
+def run_nvidia_smi():
+    try:
+        output = subprocess.check_output([NVIDIA_SMI, "-q", "-d=MEMORY,TEMPERATURE,POWER,UTILIZATION"], universal_newlines=True)
+        return output
+    except subprocess.CalledProcessError as e:
+        print(f"Error running nvidia-smi: {e}", file=sys.stderr)
+        sys.exit(1)
+
+def safe_float(value):
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+def safe_int(value):
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+def parse_nvidia_smi_output(output):
+    gpus = []
+    current_gpu = {}
+    for line in output.split('\n'):
+        if line.startswith("GPU "):
+            if current_gpu:
+                gpus.append(current_gpu)
+            current_gpu = {}
+        elif "Used                              :" in line:
+            if 'memory_used' not in current_gpu:
+                current_gpu['memory_used'] = safe_int(line.split(':')[1].strip().split()[0])
+        elif "GPU Current Temp" in line:
+            if 'temperature' not in current_gpu:
+                current_gpu['temperature'] = safe_int(line.split(':')[1].strip().split()[0])
+        elif "Power Draw" in line:
+            if 'power_draw' not in current_gpu:
+                current_gpu['power_draw'] = safe_float(line.split(':')[1].strip().split()[0])
+        elif "Gpu" in line and "%" in line:
+            if 'utilization' not in current_gpu:
+                current_gpu['utilization'] = safe_int(line.split(':')[1].strip().split()[0])
+    if current_gpu:
+        gpus.append(current_gpu)
+    return gpus
+
+def print_config():
+    metrics = {
+        'memory_used': ('Memory Usage', 'MiB'),
+        'temperature': ('Temperature', 'C'),
+        'power_draw': ('Power Draw', 'W'),
+        'utilization': ('Utilization', '%')
+    }
+
+    for metric, (title, unit) in metrics.items():
+        print(f"multigraph nvidia_gpu_{metric}")
+        print(f"graph_title Nvidia GPU {title}")
+        print(f"graph_vlabel {unit}")
+        print("graph_category gpu")
+        print(f"graph_info This graph shows Nvidia GPU {title.lower()}")
+        for i in range(2):  # Assuming 2 GPUs
+            print(f"gpu{i}_{metric}.label GPU {i} {title}")
+            print(f"gpu{i}_{metric}.draw LINE2")
+        print("")  # Empty line between graphs
+
+def print_values(gpus):
+    metrics = ['memory_used', 'temperature', 'power_draw', 'utilization']
+
+    for metric in metrics:
+        print(f"multigraph nvidia_gpu_{metric}")
+        for i, gpu in enumerate(gpus):
+            value = gpu.get(metric)
+            if value is not None:
+                print(f"gpu{i}_{metric}.value {value}")
+            else:
+                print(f"gpu{i}_{metric}.value U")  # 'U' means undefined in Munin
+        print("")  # Empty line between graphs
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "config":
+        print_config()
+    else:
+        output = run_nvidia_smi()
+        gpus = parse_nvidia_smi_output(output)
+        if len(sys.argv) > 1 and sys.argv[1] == 'debug':
+            print(gpus)
+        else:
+            print_values(gpus)
