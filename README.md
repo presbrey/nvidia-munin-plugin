@@ -1,4 +1,4 @@
-# Nvidia GPU Munin Plugin
+# NVIDIA GPU Munin Plugin
 
 This plugin offers a modern & simple solution for monitoring multiple GPUs in a Linux environment using only Python 3 and nvidia-smi, without any additional dependencies, for free under the MIT License. The aim is to provide an efficient, easy-to-use, straightforward tool for fellow enthusiasts and system administrators who may already have a Munin installation.
 
@@ -8,16 +8,16 @@ Let's get those GPUs monitored! 🚀 🖥️
 
 ## Overview
 
-This Munin plugin monitors Nvidia GPU statistics, providing valuable insights into GPU performance and resource utilization. It captures and graphs the following metrics for each detected Nvidia GPU:
+This Munin plugin monitors NVIDIA GPU statistics, providing valuable insights into GPU performance and resource utilization. It captures and graphs the following metrics for each detected NVIDIA GPU:
 
 - Memory Usage (Bytes)
 - Temperature (°C)
 - Power Draw (W)
 - GPU Utilization (%)
 
-The plugin uses the `nvidia-smi` command-line tool to gather this information, making it compatible with systems that have Nvidia GPUs and the necessary drivers installed.
+The plugin uses the `nvidia-smi` command-line tool to gather this information, making it compatible with systems that have NVIDIA GPUs and the necessary drivers installed.
 
-![Nvidia GPU Munin Plugin Screenshot](screenshot.png)
+![NVIDIA GPU Munin Plugin Screenshot](screenshot.png)
 
 ## Features
 
@@ -29,8 +29,8 @@ The plugin uses the `nvidia-smi` command-line tool to gather this information, m
 ## Requirements
 
 - Python 3 (no additional modules required)
-- Nvidia GPU(s)
-- Nvidia drivers and `nvidia-smi` utility installed
+- NVIDIA GPU(s)
+- NVIDIA drivers and `nvidia-smi` utility installed
 - Munin node
 
 ## Installation
@@ -102,7 +102,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Acknowledgments
 
-- Thanks to the Nvidia team for providing the `nvidia-smi` tool.
+- Thanks to the NVIDIA team for providing the `nvidia-smi` tool.
 - Inspired by various Munin plugins in the community.
 
 ## Author
