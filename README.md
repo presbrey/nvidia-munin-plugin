@@ -1,5 +1,11 @@
 # Nvidia GPU Munin Plugin
 
+This plugin offers a modern & simple solution for monitoring multiple GPUs in a Linux environment using only Python 3 and nvidia-smi, without any additional dependencies, for free under the MIT License. The aim is to provide an efficient, easy-to-use, straightforward tool for fellow enthusiasts and system administrators who may already have a Munin installation.
+
+After exploring options in the [munin-contrib](https://github.com/munin-monitoring/contrib/tree/master/plugins/gpu) repository, I encountered issues with the nvidia::ml Perl library dependencies. Additionally, a bash version printed 0s for all values while sending bash parse errors to stderr. These challenges led me to develop this Python-based plugin.
+
+Let's get those GPUs monitored! 🚀 🖥️
+
 ## Overview
 
 This Munin plugin monitors Nvidia GPU statistics, providing valuable insights into GPU performance and resource utilization. It captures and graphs the following metrics for each detected Nvidia GPU:
