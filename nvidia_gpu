@@ -7,10 +7,20 @@ NVIDIA_SMI = os.environ.get('NVIDIA_SMI', '/usr/bin/nvidia-smi')
 
 def run_nvidia_smi():
     try:
-        output = subprocess.check_output([NVIDIA_SMI, "-q", "-d=MEMORY,TEMPERATURE,POWER,UTILIZATION"], universal_newlines=True)
+        # Query for PCI bus ID, memory used, temperature, power draw, and GPU utilization.
+        # Output is in CSV format, without headers, and without units.
+        command = [
+            NVIDIA_SMI,
+            "--query-gpu=pci.bus_id,memory.used,temperature.gpu,power.draw,utilization.gpu",
+            "--format=csv,noheader,nounits"
+        ]
+        output = subprocess.check_output(command, universal_newlines=True)
         return output
     except subprocess.CalledProcessError as e:
         print(f"Error running nvidia-smi: {e}", file=sys.stderr)
+        sys.exit(1)
+    except FileNotFoundError:
+        print(f"Error: nvidia-smi command not found at {NVIDIA_SMI}. Please ensure it's installed and in your PATH or set the NVIDIA_SMI environment variable.", file=sys.stderr)
         sys.exit(1)
 
 def safe_float(value):
@@ -27,28 +37,48 @@ def safe_int(value):
 
 def parse_nvidia_smi_output(output):
     gpus = []
-    current_gpu = {}
-    for line in output.split('\n'):
-        if line.startswith("GPU "):
-            if current_gpu:
-                gpus.append(current_gpu)
-            current_gpu = {}
-        elif "Used                              :" in line:
-            if 'memory_used' not in current_gpu:
-                memory_mib = safe_int(line.split(':')[1].strip().split()[0])
-                current_gpu['memory_used'] = memory_mib * 1024 * 1024 if memory_mib is not None else None
-        elif "GPU Current Temp" in line:
-            if 'temperature' not in current_gpu:
-                current_gpu['temperature'] = safe_int(line.split(':')[1].strip().split()[0])
-        elif "Power Draw" in line:
-            if 'power_draw' not in current_gpu:
-                current_gpu['power_draw'] = safe_float(line.split(':')[1].strip().split()[0])
-        elif "Gpu" in line and "%" in line:
-            if 'utilization' not in current_gpu:
-                current_gpu['utilization'] = safe_int(line.split(':')[1].strip().split()[0])
-    if current_gpu:
-        gpus.append(current_gpu)
+    lines = output.strip().split('\n')
+    if not lines or not lines[0].strip(): # Handle empty output
+        return gpus
+
+    for line in lines:
+        parts = line.split(', ')
+        if len(parts) != 5:
+            print(f"Warning: Malformed line from nvidia-smi: {line}", file=sys.stderr)
+            continue
+
+        pci_bus_id = parts[0].strip()
+        # Sanitize PCI bus ID for use in Munin graph titles and field names
+        # Example: 00000000:B0:00.0 -> 00000000_B0_00_0
+        # Munin field names can only contain [a-zA-Z0-9_]
+        sanitized_id = sanitize_pci_bus_id(pci_bus_id)
+
+        gpu_data = {
+            'pci_bus_id': pci_bus_id,
+            'id': sanitized_id, # For use in munin field names
+            'memory_used': safe_int(parts[1]) * 1024 * 1024 if safe_int(parts[1]) is not None else None, # Convert MiB to Bytes
+            'temperature': safe_int(parts[2]),
+            'power_draw': safe_float(parts[3]),
+            'utilization': safe_int(parts[4])
+        }
+        gpus.append(gpu_data)
     return gpus
+
+def sanitize_pci_bus_id(pci_bus_id):
+    """
+    Sanitizes a PCI bus ID string to be a valid Munin field name component.
+    Replaces ':', '.' with '_'.
+    Example: 00000000:B0:00.0 -> 00000000_B0_00_0
+    """
+    return pci_bus_id.replace(":", "_").replace(".", "_")
+
+def get_gpu_ids_from_smi_output(output):
+    """
+    Helper function to parse nvidia-smi output and return a list of sanitized GPU IDs.
+    This is used by print_config to know how many GPUs to configure.
+    """
+    parsed_gpus = parse_nvidia_smi_output(output)
+    return [gpu['id'] for gpu in parsed_gpus]
 
 def print_config():
     metrics = {
@@ -70,9 +100,31 @@ def print_config():
         print(f"graph_vlabel {unit}")
         print("graph_category gpu")
         print(f"graph_info This graph shows Nvidia GPU {title.lower()}")
-        for i in range(2):  # Assuming 2 GPUs
-            print(f"gpu{i}_{metric}.label GPU {i} {title}")
-            print(f"gpu{i}_{metric}.draw LINE2")
+
+        # Get GPU IDs to dynamically create config
+        # This requires running nvidia-smi, which is a bit heavy for config,
+        # but necessary to know how many GPUs and their IDs.
+        # Consider caching this if performance becomes an issue, though Munin typically
+        # calls config less frequently than it fetches values.
+        smi_output = run_nvidia_smi()
+        gpu_ids = get_gpu_ids_from_smi_output(smi_output)
+
+        if not gpu_ids:
+            # Output a placeholder if no GPUs are found, so Munin doesn't error out
+            # and the user knows there's an issue with detection or no GPUs.
+            print(f"gpu_unknown_{metric}.label No GPUs Detected {title}")
+            print(f"gpu_unknown_{metric}.draw LINE2")
+        else:
+            for gpu_id in gpu_ids:
+                # Use the sanitized PCI bus ID for the field name
+                # Use a shortened version of the PCI bus ID for the label if desired,
+                # for now, using the full sanitized ID for clarity.
+                # e.g. 00000000_B0_00_0 -> GPU B0:00.0 (or similar)
+                # For simplicity, let's use the last few parts of the ID or the full one.
+                # The 'id' from parse_nvidia_smi_output is already sanitized.
+                label_id = gpu_id.replace("_", ":") # Make it more readable for graph legend
+                print(f"{gpu_id}_{metric}.label GPU {label_id} {title}")
+                print(f"{gpu_id}_{metric}.draw LINE2")
         print("")  # Empty line between graphs
 
 def print_values(gpus):
@@ -80,21 +132,147 @@ def print_values(gpus):
 
     for metric in metrics:
         print(f"multigraph nvidia_gpu_{metric}")
-        for i, gpu in enumerate(gpus):
-            value = gpu.get(metric)
-            if value is not None:
-                print(f"gpu{i}_{metric}.value {value}")
-            else:
-                print(f"gpu{i}_{metric}.value U")  # 'U' means undefined in Munin
+        if not gpus:
+             # If no GPUs, print U for the placeholder 'gpu_unknown' field if it was configured
+            if any(f"gpu_unknown_{metric}.label" in line for line in subprocess.check_output([sys.executable, __file__, "config"], universal_newlines=True).splitlines()):
+                 print(f"gpu_unknown_{metric}.value U")
+        else:
+            for gpu_data in gpus:
+                gpu_id = gpu_data['id'] # This is the sanitized ID
+                value = gpu_data.get(metric)
+                if value is not None:
+                    print(f"{gpu_id}_{metric}.value {value}")
+                else:
+                    print(f"{gpu_id}_{metric}.value U")  # 'U' means undefined in Munin
         print("")  # Empty line between graphs
 
-if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "config":
+def run_test():
+    print("Running tests...")
+
+    # Mock nvidia-smi output
+    mock_output_2gpus_similar_prefix = (
+        "00000000:B0:00.0, 1024, 60, 50.0, 30\n"
+        "00000000:D6:00.0, 2048, 65, 70.5, 50"
+    )
+
+    mock_output_4gpus_varied = (
+        "00000000:B0:00.0, 1024, 60, 50.0, 30\n"
+        "00000000:D6:00.0, 2048, 65, 70.5, 50\n"
+        "00000001:A0:00.0, 512, 55, 40.0, 20\n"
+        "00000001:C0:00.0, 4096, 70, 80.0, 75"
+    )
+
+    mock_output_no_gpus = ""
+
+    original_run_nvidia_smi = run_nvidia_smi
+    original_subprocess_check_output = subprocess.check_output
+
+    test_cases = [
+        ("2 GPUs with similar prefixes", mock_output_2gpus_similar_prefix, 2, ["00000000_B0_00_0", "00000000_D6_00_0"]),
+        ("4 GPUs with varied prefixes", mock_output_4gpus_varied, 4, ["00000000_B0_00_0", "00000000_D6_00_0", "00000001_A0_00_0", "00000001_C0_00_0"]),
+        ("No GPUs", mock_output_no_gpus, 0, [])
+    ]
+
+    for desc, mock_data, expected_gpu_count, expected_ids in test_cases:
+        print(f"\n--- Test Case: {desc} ---")
+
+        # Mock run_nvidia_smi
+        def mock_smi_func():
+            return mock_data
+
+        # Mock subprocess.check_output for the self-call in print_values (for no-GPU case)
+        def mock_check_output(command_list, universal_newlines=True):
+            if command_list == [sys.executable, __file__, "config"]:
+                # Simulate the config output based on the current mock_data for this test case
+                # This is a bit of a simplification; a more robust mock would fully generate config.
+                # For now, it's enough to test the 'gpu_unknown' logic.
+                if not mock_data.strip(): # No GPUs
+                    cfg_output_lines = []
+                    metrics = ['memory_used', 'temperature', 'power_draw', 'utilization']
+                    for metric in metrics:
+                        cfg_output_lines.append(f"multigraph nvidia_gpu_{metric}")
+                        cfg_output_lines.append(f"gpu_unknown_{metric}.label No GPUs Detected Some Title")
+                    return "\n".join(cfg_output_lines)
+                else: # GPUs present, so no 'gpu_unknown'
+                    # A more complete mock would generate full config here based on mock_data
+                    return "graph_title Nvidia GPU Memory Usage\n00000000_B0_00_0_memory_used.label GPU 00000000:B0:00:0 Memory Usage"
+            return original_subprocess_check_output(command_list, universal_newlines=universal_newlines)
+
+
+        # Apply mocks
+        globals()['run_nvidia_smi'] = mock_smi_func
+        subprocess.check_output = mock_check_output
+
+
+        # Test parsing
+        parsed_gpus = parse_nvidia_smi_output(mock_data)
+        assert len(parsed_gpus) == expected_gpu_count, f"[{desc}] Expected {expected_gpu_count} GPUs, got {len(parsed_gpus)}"
+        if expected_gpu_count > 0:
+            for i, gpu in enumerate(parsed_gpus):
+                assert gpu['id'] == expected_ids[i], f"[{desc}] GPU ID mismatch: expected {expected_ids[i]}, got {gpu['id']}"
+            # Test a sample value
+            if mock_data == mock_output_2gpus_similar_prefix:
+                 assert parsed_gpus[0]['memory_used'] == 1024 * 1024 * 1024, f"[{desc}] Memory parsing error"
+                 assert parsed_gpus[1]['temperature'] == 65, f"[{desc}] Temperature parsing error"
+
+
+        print("\nTesting print_config():")
+        # Capture print_config output (Python 3 specific using io.StringIO)
+        import io
+        old_stdout = sys.stdout
+        sys.stdout = captured_output = io.StringIO()
         print_config()
-    else:
+        sys.stdout = old_stdout
+        config_str = captured_output.getvalue()
+        # print(config_str) # For debugging
+
+        if expected_gpu_count == 0:
+            assert "gpu_unknown_memory_used.label No GPUs Detected" in config_str, f"[{desc}] Missing 'gpu_unknown' in config for no GPUs"
+        else:
+            for gpu_id in expected_ids:
+                assert f"{gpu_id}_memory_used.label GPU {gpu_id.replace('_', ':')}" in config_str, f"[{desc}] Missing config for {gpu_id}"
+
+        print("\nTesting print_values():")
+        sys.stdout = captured_output = io.StringIO()
+        # print_values needs the parsed gpus list
+        print_values(parsed_gpus)
+        sys.stdout = old_stdout
+        values_str = captured_output.getvalue()
+        # print(values_str) # For debugging
+
+        if expected_gpu_count == 0:
+             assert "gpu_unknown_memory_used.value U" in values_str, f"[{desc}] Missing 'U' value for 'gpu_unknown' for no GPUs"
+        else:
+            for i, gpu_id in enumerate(expected_ids):
+                # Check if the specific value for a metric is present
+                # Example: check memory_used for the first GPU in mock_output_2gpus_similar_prefix
+                if mock_data == mock_output_2gpus_similar_prefix and i == 0:
+                    assert f"{gpu_id}_memory_used.value {1024 * 1024 * 1024}" in values_str, f"[{desc}] Value mismatch for {gpu_id}_memory_used"
+                elif mock_data == mock_output_2gpus_similar_prefix and i == 1:
+                     assert f"{gpu_id}_temperature.value 65" in values_str, f"[{desc}] Value mismatch for {gpu_id}_temperature"
+
+        print(f"--- Test Case: {desc} PASSED ---")
+
+    # Restore original functions
+    globals()['run_nvidia_smi'] = original_run_nvidia_smi
+    subprocess.check_output = original_subprocess_check_output
+    print("\nAll tests passed!")
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "config":
+            print_config()
+        elif sys.argv[1] == "test":
+            run_test()
+        elif sys.argv[1] == 'debug':
+            output = run_nvidia_smi()
+            gpus = parse_nvidia_smi_output(output)
+            print(gpus)
+        else: # Default action: print values
+            output = run_nvidia_smi()
+            gpus = parse_nvidia_smi_output(output)
+            print_values(gpus)
+    else: # Default action: print values
         output = run_nvidia_smi()
         gpus = parse_nvidia_smi_output(output)
-        if len(sys.argv) > 1 and sys.argv[1] == 'debug':
-            print(gpus)
-        else:
-            print_values(gpus)
+        print_values(gpus)
